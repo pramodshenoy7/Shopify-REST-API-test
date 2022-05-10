@@ -1,0 +1,78 @@
+service: shopify-cld-middleware
+frameworkVersion: '2'
+
+custom:
+  allowedHeaders:
+    - Accept
+    - Content-Type
+    - Content-Length
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  lambdaHashingVersion: 20201221
+  stage: prod
+  region: us-east-2
+  memorySize: 128
+  timeout: 10
+  tracing:
+    lambda: true
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:*
+          Resource:
+            Fn::GetAtt: [ShopifyQueue, Arn]
+
+package:
+  individually: true
+  exclude:
+    - '**/*'
+
+functions:
+  filter:
+    handler: receive_webhook/filter.handler
+    name: shopify_filter
+    description: receives webhook from Cloudinary, filters request based on metadata change and adds to FIFO queue
+    package:
+      include:
+        - receive_webhook/**
+    events:
+      - http:
+          path: cld-webhook
+          method: post
+          cors:
+            origin: '*'
+            headers: ${self:custom.allowedHeaders}
+    environment:
+      SQS_QUEUE_URL: { Ref: ShopifyQueue }
+  update_shopify:
+    handler: update_shopify/update_image.handler
+    name: update_shopify_image
+    description: update primary image in Shopify
+    reservedConcurrency: 2
+    package:
+      include:
+        - update_shopify/**
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - ShopifyQueue
+              - Arn
+    environment:
+      SQS_QUEUE_URL: { Ref: ShopifyQueue }
+      SHOPIFY_SHOP: <enter_Shopify_shop_name>
+      SHOPIFY_USER: <enter_username>
+      SHOPIFY_PASSW: <enter_password>
+      CLD_CLOUD: <enter_Cloudinary_CloudName>
+
+resources:
+  Resources:
+    ShopifyQueue:
+      Type: 'AWS::SQS::Queue'
+      Properties:
+        QueueName: 'ShopifyQueue.fifo'
+        FifoQueue: true
